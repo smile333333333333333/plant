@@ -1,0 +1,1388 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Last Broadcast</title>
+<style>
+*{box-sizing:border-box}
+html,body{
+ margin:0;
+ width:100%;
+ height:100%;
+ background:#050505;
+ color:white;
+ font-family:monospace;
+ overflow:hidden;
+}
+#room{
+ width:100vw;
+ height:100vh;
+ display:flex;
+ justify-content:center;
+ align-items:center;
+ background:linear-gradient(#181818 0 72%,#090909 72%);
+}
+#tv{
+ position:relative;
+ width:min(900px,94vw);
+ height:min(560px,68vh);
+ background:#171717;
+ border:20px solid #0b0b0b;
+ border-radius:25px;
+ box-shadow:0 30px 80px #000;
+}
+#screen{
+ position:absolute;
+ inset:12px;
+ background:#000;
+ overflow:hidden;
+}
+canvas{
+ width:100%;
+ height:100%;
+ display:block;
+}
+.scanlines{
+ position:absolute;
+ inset:0;
+ pointer-events:none;
+ background:
+ repeating-linear-gradient(
+ 0deg,
+ rgba(255,255,255,.035) 0px,
+ rgba(255,255,255,.035) 1px,
+ transparent 2px,
+ transparent 4px
+ );
+}
+#title{
+ position:absolute;
+ left:8px;
+ top:8px;
+ padding:5px 8px;
+ background:#000b;
+ font-size:13px;
+}
+#clock{
+ position:absolute;
+ right:8px;
+ top:8px;
+ padding:5px 8px;
+ background:#000b;
+}
+#sub{
+ position:absolute;
+ left:5%;
+ right:5%;
+ bottom:5%;
+ text-align:center;
+ font:bold clamp(14px,2vw,24px) Arial;
+ text-shadow:
+ 2px 2px #000,
+ -2px -2px #000,
+ 2px -2px #000,
+ -2px 2px #000;
+}
+#controls{
+ position:fixed;
+ bottom:4%;
+ left:50%;
+ transform:translateX(-50%);
+ background:#151515;
+ border:2px solid #333;
+ border-radius:8px;
+ padding:10px;
+ text-align:center;
+}
+button{
+ background:#292929;
+ color:#fff;
+ border:1px solid #666;
+ padding:9px 15px;
+ margin:3px;
+ font-family:monospace;
+}
+#hint{
+ color:#777;
+ font-size:11px;
+ margin-top:4px;
+}
+</style>
+</head>
+
+<body>
+
+<div id="room">
+
+<div id="tv">
+<div id="screen">
+
+<canvas id="canvas" width="800" height="450"></canvas>
+
+<div class="scanlines"></div>
+
+<div id="title">THE LAST BROADCAST</div>
+<div id="clock">00:00</div>
+<div id="sub"></div>
+
+</div>
+</div>
+
+</div>
+
+<div id="controls">
+<button onclick="pauseMovie()" id="pauseBtn">PAUSE</button>
+<button onclick="restartMovie()">RESTART</button>
+<div id="hint">
+SPACE = pause/play &nbsp; | &nbsp; R = restart &nbsp; | &nbsp; Click TV for sound
+</div>
+</div>
+
+<script>
+
+/* =====================================================
+THE LAST BROADCAST
+A single-file coded movie.
+Every scene is drawn by JavaScript.
+No images, videos, or external files are required.
+===================================================== */
+
+const canvas=document.getElementById("canvas");
+const ctx=canvas.getContext("2d");
+
+const subtitleBox=document.getElementById("sub");
+const clockBox=document.getElementById("clock");
+
+let movieTime=0;
+let paused=false;
+let lastTime=performance.now();
+
+let audio=null;
+let master=null;
+let audioEnabled=false;
+let lastAudioEvent=-1;
+
+
+/* =====================================================
+DRAWING HELPERS
+===================================================== */
+
+function background(color){
+ ctx.fillStyle=color;
+ ctx.fillRect(0,0,800,450);
+}
+
+function rectangle(x,y,w,h,color){
+ ctx.fillStyle=color;
+ ctx.fillRect(x,y,w,h);
+}
+
+function circle(x,y,r,color){
+ ctx.fillStyle=color;
+ ctx.beginPath();
+ ctx.arc(x,y,r,0,Math.PI*2);
+ ctx.fill();
+}
+
+function text(str,x,y,size=25,color="#fff",align="left"){
+ ctx.fillStyle=color;
+ ctx.font="bold "+size+"px monospace";
+ ctx.textAlign=align;
+ ctx.fillText(str,x,y);
+}
+
+function strokeLine(x1,y1,x2,y2,color="#fff",width=2){
+ ctx.strokeStyle=color;
+ ctx.lineWidth=width;
+ ctx.beginPath();
+ ctx.moveTo(x1,y1);
+ ctx.lineTo(x2,y2);
+ ctx.stroke();
+}
+
+function staticNoise(amount=1000){
+ for(let i=0;i<amount;i++){
+
+  let c=Math.floor(Math.random()*255);
+
+  ctx.fillStyle=
+  "rgba("+c+","+c+","+c+",.15)";
+
+  ctx.fillRect(
+   Math.random()*800,
+   Math.random()*450,
+   Math.random()*5+1,
+   Math.random()*4+1
+  );
+ }
+}
+
+
+/* =====================================================
+AUDIO
+===================================================== */
+
+function enableAudio(){
+
+ if(audioEnabled)return;
+
+ audioEnabled=true;
+
+ try{
+
+  audio=
+  new (window.AudioContext||
+       window.webkitAudioContext)();
+
+  master=audio.createGain();
+
+  master.gain.value=.12;
+
+  master.connect(audio.destination);
+
+ }catch(e){}
+
+}
+
+
+function tone(
+ frequency,
+ duration,
+ type="sine",
+ volume=.08,
+ delay=0
+){
+
+ if(!audio)return;
+
+ const osc=audio.createOscillator();
+ const gain=audio.createGain();
+
+ osc.type=type;
+ osc.frequency.value=frequency;
+
+ const start=
+ audio.currentTime+delay;
+
+ gain.gain.setValueAtTime(
+  .0001,
+  start
+ );
+
+ gain.gain.exponentialRampToValueAtTime(
+  volume,
+  start+.03
+ );
+
+ gain.gain.exponentialRampToValueAtTime(
+  .0001,
+  start+duration
+ );
+
+ osc.connect(gain);
+ gain.connect(master);
+
+ osc.start(start);
+ osc.stop(start+duration+.05);
+}
+
+
+function staticSound(){
+
+ if(!audio)return;
+
+ for(let i=0;i<15;i++){
+
+  tone(
+   100+Math.random()*3000,
+   .025,
+   "square",
+   .018,
+   i*.025
+  );
+
+ }
+}
+
+
+/* =====================================================
+MOVIE SCENES
+===================================================== */
+
+function drawTitle(){
+
+ background("#000");
+
+ text(
+  "THE LAST BROADCAST",
+  400,
+  190,
+  44,
+  "#ddd",
+  "center"
+ );
+
+ text(
+  "A TELEVISION MOVIE",
+  400,
+  235,
+  20,
+  "#777",
+  "center"
+ );
+
+ text(
+  "RECORDED 1987",
+  400,
+  275,
+  17,
+  "#555",
+  "center"
+ );
+
+}
+
+
+function drawLivingRoom(){
+
+ background("#101010");
+
+ rectangle(
+  0,
+  340,
+  800,
+  110,
+  "#080808"
+ );
+
+ rectangle(
+  170,
+  75,
+  460,
+  260,
+  "#1c1c1c"
+ );
+
+ rectangle(
+  220,
+  115,
+  360,
+  190,
+  "#020202"
+ );
+
+ rectangle(
+  290,
+  330,
+  220,
+  20,
+  "#252525"
+ );
+
+}
+
+
+function drawNoSignal(){
+
+ background("#020202");
+
+ rectangle(
+  170,
+  75,
+  460,
+  280,
+  "#111"
+ );
+
+ rectangle(
+  205,
+  105,
+  390,
+  220,
+  "#000"
+ );
+
+ text(
+  "NO SIGNAL",
+  400,
+  220,
+  34,
+  "#555",
+  "center"
+ );
+
+}
+
+
+function drawNews(){
+
+ background("#27363c");
+
+ rectangle(
+  0,
+  0,
+  800,
+  55,
+  "#941919"
+ );
+
+ text(
+  "EMERGENCY BROADCAST",
+  25,
+  38,
+  27
+ );
+
+ rectangle(
+  100,
+  95,
+  600,
+  205,
+  "#46575c"
+ );
+
+ rectangle(
+  130,
+  120,
+  230,
+  145,
+  "#657579"
+ );
+
+ text(
+  "LIVE",
+  245,
+  205,
+  42,
+  "#ddd",
+  "center"
+ );
+
+ rectangle(
+  405,
+  135,
+  245,
+  12,
+  "#78878a"
+ );
+
+ rectangle(
+  405,
+  175,
+  210,
+  12,
+  "#78878a"
+ );
+
+ rectangle(
+  405,
+  215,
+  175,
+  12,
+  "#78878a"
+ );
+
+ rectangle(
+  0,
+  345,
+  800,
+  105,
+  "#111"
+ );
+
+}
+
+
+function drawHallway(){
+
+ background("#050505");
+
+ strokeLine(
+  100,50,
+  400,220,
+  "#222",
+  4
+ );
+
+ strokeLine(
+  700,50,
+  400,220,
+  "#222",
+  4
+ );
+
+ strokeLine(
+  100,450,
+  400,220,
+  "#222",
+  4
+ );
+
+ strokeLine(
+  700,450,
+  400,220,
+  "#222",
+  4
+ );
+
+ for(let y=260;y<440;y+=40){
+
+  strokeLine(
+   180,
+   y,
+   620,
+   y,
+   "#151515",
+   2
+  );
+
+ }
+
+}
+
+
+function drawDoor(open){
+
+ background("#090909");
+
+ rectangle(
+  280,
+  45,
+  240,
+  405,
+  "#191919"
+ );
+
+ let opening=open
+ ? 80
+ : 0;
+
+ if(opening===0){
+
+  rectangle(
+   310,
+   80,
+   180,
+   330,
+   "#050505"
+  );
+
+ }else{
+
+  rectangle(
+   400-opening/2,
+   80,
+   opening,
+   330,
+   "#000"
+  );
+
+ }
+
+ rectangle(
+  455,
+  250,
+  15,
+  15,
+  "#777"
+ );
+
+}
+
+
+function drawHouse(){
+
+ background("#111");
+
+ circle(
+  650,
+  85,
+  45,
+  "#ddd"
+ );
+
+ rectangle(
+  0,
+  320,
+  800,
+  130,
+  "#070707"
+ );
+
+ rectangle(
+  240,
+  180,
+  320,
+  160,
+  "#151515"
+ );
+
+ ctx.fillStyle="#060606";
+
+ ctx.beginPath();
+
+ ctx.moveTo(190,180);
+ ctx.lineTo(400,60);
+ ctx.lineTo(610,180);
+ ctx.closePath();
+
+ ctx.fill();
+
+ rectangle(
+  365,
+  245,
+  70,
+  95,
+  "#050505"
+ );
+
+ rectangle(
+  285,
+  220,
+  55,
+  55,
+  "#050505"
+ );
+
+ rectangle(
+  460,
+  220,
+  55,
+  55,
+  "#050505"
+ );
+
+}
+
+
+function drawFigure(distance){
+
+ background("#030303");
+
+ drawHouse();
+
+ let size=
+  15+
+  distance*8;
+
+ let y=
+  300-
+  distance*8;
+
+ circle(
+  400,
+  y,
+  size*.42,
+  "#010101"
+ );
+
+ rectangle(
+  400-size*.5,
+  y+size*.3,
+  size,
+  size*2,
+  "#010101"
+ );
+
+ if(distance>4){
+
+  rectangle(
+   382,
+   y-3,
+   8,
+   5,
+   "#eee"
+  );
+
+  rectangle(
+   410,
+   y-3,
+   8,
+   5,
+   "#eee"
+  );
+
+ }
+
+}
+
+
+function drawBasement(){
+
+ background("#070707");
+
+ rectangle(
+  110,
+  75,
+  580,
+  330,
+  "#121212"
+ );
+
+ rectangle(
+  260,
+  140,
+  280,
+  190,
+  "#030303"
+ );
+
+ text(
+  "ARCHIVE",
+  400,
+  125,
+  21,
+  "#777",
+  "center"
+ );
+
+ rectangle(
+  290,
+  170,
+  220,
+  120,
+  "#080808"
+ );
+
+ text(
+  "TAPE 07",
+  400,
+  235,
+  28,
+  "#aaa",
+  "center"
+ );
+
+}
+
+
+function drawFace(){
+
+ background("#020202");
+
+ circle(
+  400,
+  225,
+  115,
+  "#090909"
+ );
+
+ circle(
+  360,
+  200,
+  9,
+  "#eee"
+ );
+
+ circle(
+  440,
+  200,
+  9,
+  "#eee"
+ );
+
+ strokeLine(
+  350,
+  275,
+  450,
+  275,
+  "#eee",
+  4
+ );
+
+}
+
+
+function drawGlitch(){
+
+ background("#111");
+
+ for(let i=0;i<70;i++){
+
+  rectangle(
+   Math.random()*800,
+   Math.random()*450,
+   Math.random()*220,
+   Math.random()*8+1,
+   Math.random()>.5
+   ?"#ddd"
+   :"#222"
+  );
+
+ }
+
+}
+
+
+/* =====================================================
+SCENE DIRECTOR
+===================================================== */
+
+function drawMovie(t){
+
+ /*
+  The movie is divided into chapters.
+  Every chapter lasts several seconds.
+ */
+
+ if(t<8){
+
+  drawTitle();
+
+ }
+
+ else if(t<18){
+
+  drawLivingRoom();
+
+ }
+
+ else if(t<25){
+
+  drawNoSignal();
+
+ }
+
+ else if(t<38){
+
+  drawNews();
+
+ }
+
+ else if(t<48){
+
+  drawHallway();
+
+ }
+
+ else if(t<58){
+
+  drawDoor(
+   t>53
+  );
+
+ }
+
+ else if(t<70){
+
+  drawHouse();
+
+ }
+
+ else if(t<85){
+
+  drawFigure(
+   Math.floor(
+    (t-70)/2
+   )
+  );
+
+ }
+
+ else if(t<94){
+
+  drawGlitch();
+
+ }
+
+ else if(t<108){
+
+  drawBasement();
+
+ }
+
+ else if(t<120){
+
+  drawHallway();
+
+ }
+
+ else if(t<130){
+
+  drawDoor(true);
+
+ }
+
+ else if(t<145){
+
+  drawFigure(
+   Math.floor(
+    (t-120)/2
+   )
+  );
+
+ }
+
+ else if(t<155){
+
+  drawFace();
+
+ }
+
+ else if(t<165){
+
+  drawGlitch();
+
+ }
+
+ else if(t<175){
+
+  drawLivingRoom();
+
+ }
+
+ else if(t<185){
+
+  drawNoSignal();
+
+ }
+
+ else if(t<195){
+
+  drawFace();
+
+ }
+
+ else if(t<205){
+
+  drawGlitch();
+
+ }
+
+ else if(t<215){
+
+  drawLivingRoom();
+
+ }
+
+ else{
+
+  background("#000");
+
+  text(
+   "THE END",
+   400,
+   210,
+   50,
+   "#ddd",
+   "center"
+  );
+
+  text(
+   "OR IS IT?",
+   400,
+   255,
+   22,
+   "#777",
+   "center"
+  );
+
+ }
+
+}
+
+
+/* =====================================================
+SUBTITLES
+===================================================== */
+
+function subtitles(t){
+
+ let s="";
+
+ if(t<8)
+ s="";
+
+ else if(t<18)
+ s="RECORDER: This tape was found in an abandoned television station.";
+
+ else if(t<25)
+ s="";
+
+ else if(t<32)
+ s="ANCHOR: Good evening.";
+
+ else if(t<38)
+ s="ANCHOR: We interrupt this program.";
+
+ else if(t<48)
+ s="RECORDER: The hallway was empty when I arrived.";
+
+ else if(t<58)
+ s="RECORDER: Then I heard someone knocking.";
+
+ else if(t<70)
+ s="VOICE: Please remain where you are.";
+
+ else if(t<82)
+ s="VOICE: Do not turn the television off.";
+
+ else if(t<94)
+ s="VOICE: You can hear us, can't you?";
+
+ else if(t<108)
+ s="RECORDER: I found an old tape in the basement.";
+
+ else if(t<120)
+ s="VOICE: We have been waiting.";
+
+ else if(t<130)
+ s="VOICE: Open the door.";
+
+ else if(t<145)
+ s="VOICE: You should not be watching this.";
+
+ else if(t<155)
+ s="VOICE: Look at the screen.";
+
+ else if(t<165)
+ s="VOICE: The screen is looking back.";
+
+ else if(t<175)
+ s="RECORDER: I stopped watching.";
+
+ else if(t<185)
+ s="VOICE: But we did not stop watching you.";
+
+ else if(t<195)
+ s="VOICE: We can see you.";
+
+ else if(t<205)
+ s="VOICE: Turn it off.";
+
+ else if(t<215)
+ s="VOICE: Why haven't you?";
+
+ else
+ s="VOICE: Goodnight.";
+
+ subtitleBox.textContent=s;
+
+}
+
+
+/* =====================================================
+AUDIO EVENTS
+===================================================== */
+
+function audioEvent(t){
+
+ if(!audio)return;
+
+ let event=Math.floor(t);
+
+ if(event===lastAudioEvent)
+ return;
+
+ lastAudioEvent=event;
+
+ if(event===0){
+
+  tone(
+   70,
+   1.2,
+   "sine",
+   .08
+  );
+
+ }
+
+ if(event===18){
+
+  staticSound();
+
+ }
+
+ if(event===25){
+
+  tone(
+   140,
+   .8,
+   "square",
+   .05
+  );
+
+ }
+
+ if(event===38){
+
+  tone(
+   55,
+   .7,
+   "sawtooth",
+   .06
+  );
+
+ }
+
+ if(event===53){
+
+  tone(
+   75,
+   .15,
+   "square",
+   .12
+  );
+
+  tone(
+   55,
+   .15,
+   "square",
+   .1,
+   .25
+  );
+
+ }
+
+ if(event===70){
+
+  staticSound();
+
+ }
+
+ if(event===82){
+
+  tone(
+   90,
+   1,
+   "sine",
+   .05
+  );
+
+ }
+
+ if(event===94){
+
+  staticSound();
+
+ }
+
+ if(event===120){
+
+  tone(
+   45,
+   1.5,
+   "sine",
+   .06
+  );
+
+ }
+
+ if(event===145){
+
+  tone(
+   300,
+   .08,
+   "square",
+   .08
+  );
+
+ }
+
+ if(event===155){
+
+  staticSound();
+
+ }
+
+ if(event===185){
+
+  tone(
+   40,
+   2,
+   "sine",
+   .08
+  );
+
+ }
+
+ if(event===195){
+
+  staticSound();
+
+ }
+
+ if(event===205){
+
+  tone(
+   500,
+   .08,
+   "square",
+   .08
+  );
+
+  tone(
+   250,
+   .15,
+   "square",
+   .06,
+   .12
+  );
+
+ }
+
+}
+
+
+/* =====================================================
+ENABLE AUDIO
+===================================================== */
+
+function startAudio(){
+
+ if(audio)return;
+
+ try{
+
+  audio=
+  new(
+   window.AudioContext ||
+   window.webkitAudioContext
+  )();
+
+  master=
+  audio.createGain();
+
+  master.gain.value=.12;
+
+  master.connect(
+   audio.destination
+  );
+
+ }catch(e){}
+
+}
+
+
+document
+ .getElementById("screen")
+ .addEventListener(
+  "click",
+  startAudio
+ );
+
+
+document.addEventListener(
+ "keydown",
+ startAudio,
+ {once:true}
+);
+
+
+/* =====================================================
+CONTROLS
+===================================================== */
+
+function pauseMovie(){
+
+ paused=!paused;
+
+ document.getElementById(
+  "pauseBtn"
+ ).textContent=
+ paused
+ ?"PLAY"
+ :"PAUSE";
+
+}
+
+
+function restartMovie(){
+
+ movieTime=0;
+
+ lastTime=
+ performance.now();
+
+ lastAudioEvent=-1;
+
+}
+
+
+document.addEventListener(
+ "keydown",
+ function(e){
+
+  if(e.key===" "){
+
+   e.preventDefault();
+
+   pauseMovie();
+
+  }
+
+  if(
+   e.key.toLowerCase()==="r"
+  ){
+
+   restartMovie();
+
+  }
+
+ }
+);
+
+
+/* =====================================================
+MAIN MOVIE LOOP
+===================================================== */
+
+function loop(now){
+
+ if(!paused){
+
+  /*
+   One second per major movie shot.
+   The scene itself is redrawn every frame.
+  */
+
+  movieTime+=
+   (now-lastTime)/1000;
+
+  drawMovie(movieTime);
+
+  subtitles(movieTime);
+
+  audioEvent(movieTime);
+
+  let seconds=
+   Math.floor(movieTime);
+
+  clockBox.textContent=
+   String(
+    Math.floor(seconds/60)
+   ).padStart(2,"0")
+   +
+   ":"
+   +
+   String(
+    seconds%60
+   ).padStart(2,"0");
+
+  /*
+   Random old-TV interference.
+  */
+
+  if(
+   Math.random()<.025
+  ){
+
+   staticNoise(300);
+
+  }
+
+ }
+
+ lastTime=now;
+
+ requestAnimationFrame(loop);
+
+}
+
+requestAnimationFrame(loop);
+
+</script>
+
+</body>
+  </html>
